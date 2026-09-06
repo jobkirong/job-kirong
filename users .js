@@ -1,304 +1,256 @@
 // ============================================================
-// 👑 KIRONG AI — USER STORAGE V14
-// Vercel Blob + User Profiles + Usage
+// 👑 KIRONG AI — PLANS & USAGE ENGINE V1
+// Defines Free/Pro tiers, daily usage tracking, and feature gates
 // ============================================================
 
 "use strict";
 
-import {
-  put,
-  get
-} from "@vercel/blob";
+export const PLAN_FREE = "free";
+export const PLAN_PRO = "pro";
 
-import {
-  createDefaultUser,
-  resetDailyUsageIfNeeded,
-  normalizePlan
-} from "./plans.js";
+// How long a single M-Pesa payment keeps Pro active for.
+export const PRO_DURATION_DAYS =
+  Number(process.env.KIRONG_PRO_DURATION_DAYS) || 30;
 
-const TOKEN =
-  process.env.BLOB_READ_WRITE_TOKEN;
+// Price shown to the user and charged via STK Push (KES).
+export const PRO_PRICE_KES =
+  Number(process.env.KIRONG_PRO_PRICE_KES) || 199;
 
-const USER_PREFIX =
-  "kirong-ai/users/";
+const PLANS = {
+  [PLAN_FREE]: {
+    id: PLAN_FREE,
+    label: "Free",
+    maxInputTokens: 6000,
+    maxOutputTokens: 1024,
+    dailyMessageLimit: 30,
+    dailyImageLimit: 3,
+    dailyTokenLimit: 60000,
+    features: {
+      contentFactory: false,
+      whatsappBusiness: false,
+      blogEngine: false,
+      affiliateEngine: false,
+      imageGeneration: true
+    }
+  },
 
-// ============================================================
-// 🔐 SAFE ID
-// ============================================================
-
-function safeId(id) {
-  return String(id || "anonymous")
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]/g, "_")
-    .slice(0, 100);
-}
-
-// ============================================================
-// 📁 PATH
-// ============================================================
-
-function userPath(userId) {
-  return `${USER_PREFIX}${safeId(userId)}.json`;
-}
-
-// ============================================================
-// 🔐 TOKEN
-// ============================================================
-
-function requireToken() {
-  if (!TOKEN) {
-    throw new Error(
-      "BLOB_READ_WRITE_TOKEN is missing."
-    );
+  [PLAN_PRO]: {
+    id: PLAN_PRO,
+    label: "Pro",
+    maxInputTokens: 16000,
+    maxOutputTokens: 4096,
+    dailyMessageLimit: 300,
+    dailyImageLimit: 50,
+    dailyTokenLimit: 500000,
+    features: {
+      contentFactory: true,
+      whatsappBusiness: true,
+      blogEngine: true,
+      affiliateEngine: true,
+      imageGeneration: true
+    }
   }
+};
+
+// ============================================================
+// 📅 DAILY RESET HELPER
+// ============================================================
+
+function todayKey() {
+  // UTC date string, e.g. "2026-08-26" — resets usage once per day
+  return new Date().toISOString().slice(0, 10);
 }
 
 // ============================================================
-// 📥 GET
+// 👤 DEFAULT USER SHAPE
 // ============================================================
 
-export async function getUser(userId) {
-  requireToken();
+export function createDefaultUser(userId) {
+  return {
+    userId,
+    plan: PLAN_FREE,
+    subscription: null, // { startedAt, expiresAt, lastPaymentRef }
+    usage: {
+      date: todayKey(),
+      messages: 0,
+      images: 0,
+      inputTokens: 0,
+      outputTokens: 0
+    },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
 
-  const id = safeId(userId);
+// ============================================================
+// 🔄 RESET USAGE ON A NEW DAY
+// ============================================================
 
-  try {
-    const result = await get(
-      userPath(id),
-      {
-        token: TOKEN,
-        access: "private",
-        useCache: false
-      }
-    );
-
-    if (
-      !result ||
-      result.statusCode !== 200 ||
-      !result.stream
-    ) {
-      return null;
-    }
-
-    const text =
-      await new Response(
-        result.stream
-      ).text();
-
-    let user;
-
-    try {
-      user = JSON.parse(text);
-    } catch {
-      return null;
-    }
-
-    if (
-      !user ||
-      typeof user !== "object"
-    ) {
-      return null;
-    }
-
-    user.userId =
-      safeId(
-        user.userId || id
-      );
-
-    resetDailyUsageIfNeeded(user);
-
-    normalizePlan(user);
-
-    return user;
-  }
-
-  catch (error) {
-    const message =
-      String(
-        error?.message || ""
-      ).toLowerCase();
-
-    if (
-      error?.name ===
-        "BlobNotFoundError" ||
-      message.includes("not found") ||
-      message.includes("does not exist") ||
-      message.includes("404")
-    ) {
-      return null;
-    }
-
-    throw error;
+export function resetDailyUsageIfNeeded(user) {
+  if (!user.usage || user.usage.date !== todayKey()) {
+    user.usage = {
+      date: todayKey(),
+      messages: 0,
+      images: 0,
+      inputTokens: 0,
+      outputTokens: 0
+    };
   }
 }
 
 // ============================================================
-// 💾 SAVE
+// 🔽 DOWNGRADE EXPIRED PRO SUBSCRIPTIONS
 // ============================================================
 
-export async function saveUser(user) {
-  requireToken();
+export function normalizePlan(user) {
+  if (user.plan === PLAN_PRO && user.subscription?.expiresAt) {
+    const expiresAt = new Date(user.subscription.expiresAt).getTime();
 
-  if (
-    !user ||
-    typeof user !== "object"
-  ) {
-    throw new Error(
-      "Invalid user object."
-    );
+    if (Number.isFinite(expiresAt) && Date.now() > expiresAt) {
+      user.plan = PLAN_FREE;
+    }
   }
 
-  if (!user.userId) {
-    throw new Error(
-      "Cannot save user without userId."
-    );
+  if (!PLANS[user.plan]) {
+    user.plan = PLAN_FREE;
   }
 
-  user.userId =
-    safeId(user.userId);
+  return user.plan;
+}
 
+// ============================================================
+// 📦 GET PLAN DEFINITION FOR A USER
+// ============================================================
+
+export function getUserPlan(user) {
+  const id = PLANS[user?.plan] ? user.plan : PLAN_FREE;
+  return PLANS[id];
+}
+
+// ============================================================
+// 🚦 FEATURE ACCESS CHECK
+// ============================================================
+
+export function canUseFeature(user, featureName) {
+  if (!featureName) return true;
+  const plan = getUserPlan(user);
+  return Boolean(plan.features?.[featureName]);
+}
+
+// ============================================================
+// 🔢 DAILY MESSAGE / IMAGE LIMIT CHECK
+// ============================================================
+
+export function checkUsageLimit(user, type) {
+  resetDailyUsageIfNeeded(user);
+  const plan = getUserPlan(user);
+
+  if (type === "message") {
+    const limit = plan.dailyMessageLimit;
+    const current = user.usage.messages || 0;
+
+    return {
+      allowed: current < limit,
+      limit,
+      current,
+      remaining: Math.max(0, limit - current)
+    };
+  }
+
+  if (type === "image") {
+    const limit = plan.dailyImageLimit;
+    const current = user.usage.images || 0;
+
+    return {
+      allowed: current < limit,
+      limit,
+      current,
+      remaining: Math.max(0, limit - current)
+    };
+  }
+
+  return { allowed: true, limit: Infinity, current: 0, remaining: Infinity };
+}
+
+// ============================================================
+// 🔢 DAILY TOKEN LIMIT CHECK
+// ============================================================
+
+export function checkTokenLimit(user, { inputTokens = 0, outputTokens = 0 } = {}) {
+  resetDailyUsageIfNeeded(user);
+  const plan = getUserPlan(user);
+
+  const projected =
+    (user.usage.inputTokens || 0) +
+    (user.usage.outputTokens || 0) +
+    inputTokens +
+    outputTokens;
+
+  if (projected > plan.dailyTokenLimit) {
+    return { allowed: false, reason: "Daily AI token limit reached." };
+  }
+
+  return { allowed: true };
+}
+
+// ============================================================
+// ✍️ RECORD USAGE AFTER A SUCCESSFUL REQUEST
+// ============================================================
+
+export function recordUsage(user, { type, inputTokens = 0, outputTokens = 0 } = {}) {
   resetDailyUsageIfNeeded(user);
 
-  normalizePlan(user);
+  if (type === "message") user.usage.messages = (user.usage.messages || 0) + 1;
+  if (type === "image") user.usage.images = (user.usage.images || 0) + 1;
 
-  user.updatedAt =
-    new Date().toISOString();
+  user.usage.inputTokens = (user.usage.inputTokens || 0) + inputTokens;
+  user.usage.outputTokens = (user.usage.outputTokens || 0) + outputTokens;
+}
 
-  const blob =
-    await put(
-      userPath(user.userId),
+// ============================================================
+// 📊 USAGE SNAPSHOT (for /api/user)
+// ============================================================
 
-      JSON.stringify(
-        user,
-        null,
-        2
-      ),
-
-      {
-        token: TOKEN,
-
-        access: "private",
-
-        contentType:
-          "application/json",
-
-        addRandomSuffix: false,
-
-        allowOverwrite: true
-      }
-    );
+export function getUsageSnapshot(user) {
+  resetDailyUsageIfNeeded(user);
+  const plan = getUserPlan(user);
 
   return {
-    ...user,
-
-    storageUrl:
-      blob?.url || null
+    plan: plan.id,
+    messages: { used: user.usage.messages || 0, limit: plan.dailyMessageLimit },
+    images: { used: user.usage.images || 0, limit: plan.dailyImageLimit },
+    tokens: {
+      used: (user.usage.inputTokens || 0) + (user.usage.outputTokens || 0),
+      limit: plan.dailyTokenLimit
+    }
   };
 }
 
 // ============================================================
-// 👤 GET OR CREATE
+// 👑 ACTIVATE / EXTEND PRO SUBSCRIPTION (called after payment)
 // ============================================================
 
-export async function getOrCreateUser(userId) {
-  const id = safeId(userId);
+export function activateProSubscription(user, { days = PRO_DURATION_DAYS, paymentRef = null } = {}) {
+  const now = Date.now();
 
-  let user =
-    await getUser(id);
+  const currentExpiry =
+    user.subscription?.expiresAt
+      ? new Date(user.subscription.expiresAt).getTime()
+      : now;
 
-  if (user) {
-    resetDailyUsageIfNeeded(user);
-    normalizePlan(user);
+  // If they still have active Pro time left, extend from there
+  // instead of from "now" — renewing early doesn't waste days.
+  const base = Number.isFinite(currentExpiry) ? Math.max(now, currentExpiry) : now;
 
-    return user;
-  }
+  const expiresAt = new Date(base + days * 24 * 60 * 60 * 1000).toISOString();
 
-  user =
-    createDefaultUser(id);
+  user.plan = PLAN_PRO;
 
-  return await saveUser(user);
-}
-
-// ============================================================
-// 🔄 UPDATE
-// ============================================================
-
-export async function updateUser(
-  userId,
-  updates = {}
-) {
-  const user =
-    await getOrCreateUser(userId);
-
-  if (
-    !updates ||
-    typeof updates !== "object"
-  ) {
-    throw new Error(
-      "Invalid user updates."
-    );
-  }
-
-  const {
-    userId: ignoredUserId,
-    createdAt: ignoredCreatedAt,
-    usage: ignoredUsage,
-    plan: ignoredPlan,
-    subscription: ignoredSubscription,
-    ...safeUpdates
-  } = updates;
-
-  Object.assign(
-    user,
-    safeUpdates
-  );
-
-  user.userId =
-    safeId(userId);
-
-  return await saveUser(user);
-}
-
-// ============================================================
-// 📊 USAGE
-// ============================================================
-
-export async function getUserUsage(userId) {
-  const user =
-    await getOrCreateUser(userId);
-
-  return {
-    userId: user.userId,
-
-    plan: user.plan,
-
-    usage: user.usage,
-
-    subscription:
-      user.subscription || null
+  user.subscription = {
+    startedAt: user.subscription?.startedAt || new Date().toISOString(),
+    expiresAt,
+    lastPaymentRef: paymentRef || user.subscription?.lastPaymentRef || null
   };
-}
 
-// ============================================================
-// 👑 PRO CHECK
-// ============================================================
-
-export async function isProUser(userId) {
-  const user =
-    await getOrCreateUser(userId);
-
-  return (
-    normalizePlan(user) ===
-    "pro"
-  );
-}
-
-// ============================================================
-// 📦 PATH
-// ============================================================
-
-export function getUserStoragePath(userId) {
-  return userPath(
-    safeId(userId)
-  );
+  return user;
 }
