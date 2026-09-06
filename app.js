@@ -134,18 +134,6 @@ const imageModeBtn =
 const planBadge =
   document.getElementById("planBadge");
 
-const usageBarWrap =
-  document.getElementById("usageBarWrap");
-
-const usageBarFill =
-  document.getElementById("usageBarFill");
-
-const usageBarPercent =
-  document.getElementById("usageBarPercent");
-
-const usageLimitsBtn =
-  document.getElementById("usageLimitsBtn");
-
 const languageBtn =
   document.getElementById("languageBtn");
 
@@ -160,27 +148,6 @@ const finishOnboardingBtn =
 
 const skipOnboardingBtn =
   document.getElementById("skipOnboarding");
-
-const sidebar =
-  document.getElementById("sidebar");
-
-const sidebarToggle =
-  document.getElementById("sidebarToggle");
-
-const sidebarCloseBtn =
-  document.getElementById("sidebarCloseBtn");
-
-const sidebarOverlay =
-  document.getElementById("sidebarOverlay");
-
-const sidebarNewChatBtn =
-  document.getElementById("sidebarNewChatBtn");
-
-const sidebarPlanBadge =
-  document.getElementById("sidebarPlanBadge");
-
-const historySearchInput =
-  document.getElementById("historySearchInput");
 
 /* ============================================================
    🧠 STATE
@@ -217,8 +184,6 @@ let voiceRepliesEnabled =
 let currentUserData = null;
 
 let activeAbortController = null;
-
-let userStoppedGeneration = false;
 
 let networkOnline =
   navigator.onLine !== false;
@@ -405,14 +370,12 @@ function initTabs() {
 
           document
             .querySelectorAll(
-              ".tabPanel"
+              ".tabContent"
             )
-            .forEach((panel) => {
-              panel.classList.remove(
+            .forEach((section) => {
+              section.classList.remove(
                 "active"
               );
-
-              panel.hidden = true;
             });
 
           btn.classList.add(
@@ -424,18 +387,13 @@ function initTabs() {
             "true"
           );
 
-          const panel =
-            document.getElementById(
-              tab
-            );
-
-          if (panel) {
-            panel.classList.add(
+          document
+            .getElementById(
+              tab + "Tab"
+            )
+            ?.classList.add(
               "active"
             );
-
-            panel.hidden = false;
-          }
 
           if (
             tab === "projects"
@@ -448,164 +406,118 @@ function initTabs() {
           ) {
             renderHistoryList();
           }
-
-          closeSidebar();
         }
       );
     });
 }
 
 /* ============================================================
-   👑 SIDEBAR (ChatGPT-style: New chat, search, recents)
-   ------------------------------------------------------------
-   Permanent panel on desktop (CSS overrides the fixed/transform
-   rules at >=900px), off-canvas drawer on mobile — opened via the
-   hamburger button in the top bar, closed via the ✕ button, an
-   overlay tap, or automatically after picking a nav item / chat.
+   👑 ROYAL GUIDELINES
 ============================================================ */
 
-function openSidebar() {
-  sidebar?.classList.add("open");
-  sidebarOverlay?.classList.add("open");
-}
+function initRoyalGuidelines() {
+  const grid =
+    document.querySelector(
+      ".quickGrid"
+    );
 
-function closeSidebar() {
-  sidebar?.classList.remove("open");
-  sidebarOverlay?.classList.remove("open");
-}
+  const welcome =
+    document.getElementById(
+      "kirongWelcome"
+    );
 
-function toggleSidebar() {
-  if (sidebar?.classList.contains("open")) {
-    closeSidebar();
+  if (!grid) return;
+
+  const hasVisited =
+    localStorage.getItem(
+      STORAGE_KEYS.visited
+    );
+
+  if (!hasVisited) {
+    grid.classList.add("show");
+
+    let timer =
+      setTimeout(() => {
+        if (!grid.dataset.used) {
+          grid.classList.add("hide");
+
+          setTimeout(() => {
+            welcome?.classList.add(
+              "hideWelcome"
+            );
+          }, 500);
+
+          localStorage.setItem(
+            STORAGE_KEYS.visited,
+            "true"
+          );
+        }
+      }, 4000);
+
+    grid.addEventListener(
+      "mouseenter",
+      () => clearTimeout(timer)
+    );
+
+    grid.addEventListener(
+      "mouseleave",
+      () => {
+        timer = setTimeout(() => {
+          if (!grid.dataset.used) {
+            grid.classList.add(
+              "hide"
+            );
+
+            localStorage.setItem(
+              STORAGE_KEYS.visited,
+              "true"
+            );
+          }
+        }, 2000);
+      }
+    );
+
+    grid
+      .querySelectorAll(".qBtn")
+      .forEach((btn) => {
+        btn.addEventListener(
+          "click",
+          () => {
+            grid.dataset.used =
+              "true";
+
+            grid.classList.add(
+              "hide"
+            );
+
+            localStorage.setItem(
+              STORAGE_KEYS.visited,
+              "true"
+            );
+
+            if (userInput) {
+              userInput.value =
+                btn.dataset.prompt ||
+                "";
+
+              sendMessage();
+            }
+          }
+        );
+      });
   } else {
-    openSidebar();
+    grid.classList.add("hide");
+
+    if (
+      welcome &&
+      chatBox &&
+      chatBox.children.length > 1
+    ) {
+      welcome.style.display =
+        "none";
+    }
   }
 }
-
-if (sidebarToggle) {
-  sidebarToggle.addEventListener("click", toggleSidebar);
-}
-
-if (sidebarCloseBtn) {
-  sidebarCloseBtn.addEventListener("click", closeSidebar);
-}
-
-if (sidebarOverlay) {
-  sidebarOverlay.addEventListener("click", closeSidebar);
-}
-
-if (sidebarNewChatBtn) {
-  sidebarNewChatBtn.addEventListener("click", () => {
-    startNewChat();
-
-    document
-      .querySelector('.tabBtn[data-tab="chat"]')
-      ?.click();
-
-    closeSidebar();
-  });
-}
-
-if (sidebarPlanBadge) {
-  sidebarPlanBadge.addEventListener("click", () => openProPaymentModal());
-}
-
-// --------------------------------------------------------
-// 🔍 SEARCH CHATS (History tab's list)
-// --------------------------------------------------------
-
-if (historySearchInput) {
-  historySearchInput.addEventListener("input", () => {
-    const query = historySearchInput.value.trim().toLowerCase();
-    const items =
-      document.querySelectorAll("#historyList .historyItem");
-
-    items.forEach((item) => {
-      const matches =
-        !query ||
-        (item.dataset.searchText || "").includes(query);
-
-      item.style.display = matches ? "" : "none";
-    });
-  });
-}
-
-// --------------------------------------------------------
-// 👉 EDGE-SWIPE GESTURE — swipe right from the screen's left
-// edge to open the sidebar, swipe left anywhere to close it,
-// same as ChatGPT's mobile app. Only listens on touch devices;
-// desktop mouse users already have the permanent sidebar (CSS
-// disables the drawer transform above 900px) so this is a no-op
-// there regardless.
-// --------------------------------------------------------
-
-(function initSidebarSwipeGesture() {
-  const EDGE_ZONE_PX = 28; // how close to the left edge a swipe must start to open
-  const SWIPE_THRESHOLD_PX = 60; // minimum horizontal travel to trigger
-  const MAX_VERTICAL_DRIFT_PX = 60; // ignore mostly-vertical touches (scrolling)
-
-  let touchStartX = null;
-  let touchStartY = null;
-  let startedAtEdge = false;
-  let sidebarWasOpenAtStart = false;
-
-  document.addEventListener(
-    "touchstart",
-    (event) => {
-      const touch = event.touches?.[0];
-      if (!touch) return;
-
-      touchStartX = touch.clientX;
-      touchStartY = touch.clientY;
-      startedAtEdge = touch.clientX <= EDGE_ZONE_PX;
-      sidebarWasOpenAtStart =
-        sidebar?.classList.contains("open") || false;
-    },
-    { passive: true }
-  );
-
-  document.addEventListener(
-    "touchend",
-    (event) => {
-      if (touchStartX === null) return;
-
-      const touch = event.changedTouches?.[0];
-      if (!touch) return;
-
-      const deltaX = touch.clientX - touchStartX;
-      const deltaY = Math.abs(touch.clientY - touchStartY);
-
-      if (deltaY <= MAX_VERTICAL_DRIFT_PX) {
-        if (
-          !sidebarWasOpenAtStart &&
-          startedAtEdge &&
-          deltaX >= SWIPE_THRESHOLD_PX
-        ) {
-          openSidebar();
-        } else if (
-          sidebarWasOpenAtStart &&
-          deltaX <= -SWIPE_THRESHOLD_PX
-        ) {
-          closeSidebar();
-        }
-      }
-
-      touchStartX = null;
-      touchStartY = null;
-    },
-    { passive: true }
-  );
-})();
-
-/* ============================================================
-   👑 ROYAL GUIDELINES
-   ------------------------------------------------------------
-   The quickGrid prompt buttons this used to manage were removed
-   to declutter the chat screen — kept as a no-op stub since
-   showWelcome() still calls it.
-============================================================ */
-
-function initRoyalGuidelines() {}
 
 /* ============================================================
    🛡️ HTML SAFETY
@@ -965,32 +877,13 @@ function setSendingState(active) {
     Boolean(active);
 
   if (sendBtn) {
-    // Keep the button enabled while sending — it becomes a Stop
-    // button instead of a disabled Send button, so the person can
-    // interrupt a long-running reply instead of just waiting.
-    sendBtn.disabled = false;
+    sendBtn.disabled =
+      isSending;
 
-    sendBtn.classList.toggle(
-      "stopping",
+    sendBtn.style.opacity =
       isSending
-    );
-
-    sendBtn.innerHTML =
-      isSending
-        ? 'Stop <span aria-hidden="true">■</span>'
-        : 'Send <span aria-hidden="true">↑</span>';
-
-    sendBtn.title =
-      isSending
-        ? "Stop generating"
-        : "Send";
-
-    sendBtn.setAttribute(
-      "aria-label",
-      isSending
-        ? "Stop generating"
-        : "Send message"
-    );
+        ? "0.6"
+        : "";
   }
 
   if (userInput) {
@@ -1007,27 +900,6 @@ function setSendingState(active) {
     imageModeBtn.disabled =
       isSending;
   }
-}
-
-/* ============================================================
-   🛑 STOP GENERATING
-   ------------------------------------------------------------
-   Aborts the in-flight request. sendMessage()'s streaming loop
-   catches the resulting AbortError and finalizes whatever text
-   had already streamed in, instead of discarding it or treating
-   it as a connection failure.
-============================================================ */
-
-function stopGenerating() {
-  if (!isSending || !activeAbortController) {
-    return;
-  }
-
-  userStoppedGeneration = true;
-
-  try {
-    activeAbortController.abort();
-  } catch {}
 }
 
 /* ============================================================
@@ -1876,11 +1748,7 @@ async function transcribeRecording(blob) {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok || !data.ok) {
-      throw new Error(
-        response.ok
-          ? extractApiError(data)
-          : `${extractApiError(data)} (Server ${response.status})`
-      );
+      throw new Error(data?.error || `Server ${response.status}`);
     }
 
     if (userInput) {
@@ -2176,11 +2044,7 @@ async function speakText(text, button) {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok || !data.ok || !data.audio) {
-      throw new Error(
-        response.ok
-          ? extractApiError(data)
-          : `${extractApiError(data)} (Server ${response.status})`
-      );
+      throw new Error(data?.error || `Server ${response.status}`);
     }
 
     const audio = new Audio(data.audio);
@@ -2732,14 +2596,104 @@ function showWelcome() {
 
   chatBox.innerHTML =
     `
-    <div class="welcome-card">
-      <span class="welcome-crown" aria-hidden="true">♛</span>
-      <h2>What can I help you create?</h2>
-      <p>Ask a question, upload a document, or choose a tool to get started.</p>
+    <div
+      class="kirongWelcome"
+      id="kirongWelcome"
+    >
+      <div class="kirongWelcomeLogo">
+        <img
+          src="/icon-192.png"
+          alt="Kirong AI"
+        >
+      </div>
+
+      <div class="welcomeEyebrow">
+        <span></span>
+        KIRONG AI CORE
+        <span></span>
+      </div>
+
+      <h2>
+        Welcome,
+        <span>Kings & Queens!</span>
+        👑
+      </h2>
+
+      <p>
+        Hello 👋 I'm
+        <strong>Kirong AI</strong>,
+        your intelligent assistant for
+        <strong>
+          coding, writing, business
+        </strong>
+        and everyday tasks.
+        <br><br>
+        What can I help you with today?
+      </p>
+
+      <div class="quickGrid">
+        <button
+          class="qBtn"
+          data-prompt="Build me a modern portfolio website"
+        >
+          💻 Build Website
+        </button>
+
+        <button
+          class="qBtn"
+          data-prompt="Give me 3 business ideas with 10k in Kenya"
+        >
+          💡 10K Biz Idea
+        </button>
+
+        <button
+          class="qBtn"
+          data-prompt="Write me a professional CV for a software developer"
+        >
+          📄 Pro CV
+        </button>
+
+        <button
+          class="qBtn"
+          data-prompt="Explain Python like I'm 12 years old"
+        >
+          📚 Learn Fast
+        </button>
+      </div>
     </div>
     `;
 
+  bindQuickButtons();
+
+  initRoyalGuidelines();
+
   applyTranslations();
+}
+
+function bindQuickButtons() {
+  document
+    .querySelectorAll(
+      ".qBtn"
+    )
+    .forEach((button) => {
+      button.addEventListener(
+        "click",
+        () => {
+          const prompt =
+            button.dataset
+              .prompt || "";
+
+          if (userInput) {
+            userInput.value =
+              prompt;
+
+            autoResizeInput();
+
+            sendMessage();
+          }
+        }
+      );
+    });
 }
 
 /* ============================================================
@@ -2747,12 +2701,12 @@ function showWelcome() {
 ============================================================ */
 
 function renderHistoryList() {
-  const targets = [
-    document.getElementById("historyList"),
-    document.getElementById("sidebarHistoryList")
-  ].filter(Boolean);
+  const list =
+    document.getElementById(
+      "historyList"
+    );
 
-  if (!targets.length) {
+  if (!list) {
     return;
   }
 
@@ -2771,71 +2725,57 @@ function renderHistoryList() {
   }
 
   if (!chats.length) {
-    targets.forEach((list) => {
-      list.innerHTML =
-        '<p class="emptyText">No conversations yet. Start chatting!</p>';
-    });
+    list.innerHTML =
+      '<p class="emptyText">No conversations yet. Start chatting!</p>';
 
     return;
   }
 
-  targets.forEach((list) => {
-    list.innerHTML = "";
+  list.innerHTML =
+    "";
 
-    chats
-      .slice(0, 30)
-      .forEach(
-        (chat) => {
-          const item =
-            document.createElement(
-              "div"
-            );
+  chats
+    .slice(0, 30)
+    .forEach(
+      (chat) => {
+        const item =
+          document.createElement(
+            "div"
+          );
 
-          const title =
+        item.className =
+          "historyItem" +
+          (chat.id ===
+          currentChatId
+            ? " active"
+            : "");
+
+        item.innerHTML =
+          `<div>` +
+          `<b>${escapeHTML(
             chat.title ||
-            "New Chat";
+              "New Chat"
+          )}</b>` +
+          `<small>${new Date(
+            chat.updatedAt ||
+              Date.now()
+          ).toLocaleDateString()}</small>` +
+          `</div>` +
+          `<button aria-label="Open chat">↗️</button>`;
 
-          item.className =
-            "historyItem" +
-            (chat.id ===
-            currentChatId
-              ? " active"
-              : "");
+        item.addEventListener(
+          "click",
+          () =>
+            openChat(
+              chat.id
+            )
+        );
 
-          // Used by the sidebar search box to filter without
-          // touching the DOM structure — plain lowercase title.
-          item.dataset.searchText =
-            title.toLowerCase();
-
-          item.innerHTML =
-            `<div>` +
-            `<b>${escapeHTML(
-              title
-            )}</b>` +
-            `<small>${new Date(
-              chat.updatedAt ||
-                Date.now()
-            ).toLocaleDateString()}</small>` +
-            `</div>` +
-            `<button aria-label="Open chat">↗️</button>`;
-
-          item.addEventListener(
-            "click",
-            () => {
-              openChat(
-                chat.id
-              );
-
-              closeSidebar();
-            }
-          );
-
-          list.appendChild(
-            item
-          );
-        }
-      );
-  });
+        list.appendChild(
+          item
+        );
+      }
+    );
 }
 
 /* ============================================================
@@ -3065,11 +3005,8 @@ async function fetchWithTimeout(
   const externalSignal =
     options.signal;
 
-  let timedOutInternally = false;
-
   const timer =
     setTimeout(() => {
-      timedOutInternally = true;
       activeAbortController.abort();
     }, timeout);
 
@@ -3087,18 +3024,9 @@ async function fetchWithTimeout(
       error?.name ===
       "AbortError"
     ) {
-      // Only our own timeout timer gets the friendly "timed out"
-      // message. An abort triggered some other way (e.g. the user
-      // pressing Stop before the response even arrived) rethrows
-      // the original AbortError so the caller can tell the two
-      // apart via error.name, instead of both looking identical.
-      if (timedOutInternally) {
-        throw new Error(
-          "Request timed out. Please try again."
-        );
-      }
-
-      throw error;
+      throw new Error(
+        "Request timed out. Please try again."
+      );
     }
 
     if (
@@ -3232,10 +3160,6 @@ async function refreshUserData() {
       updatePlanBadge(
         data
       );
-
-      updateUsageBar(
-        data
-      );
     }
 
     return data;
@@ -3247,171 +3171,36 @@ async function refreshUserData() {
 function updatePlanBadge(
   data
 ) {
+  if (!planBadge) {
+    return;
+  }
+
   const plan =
     data?.plan ||
     data?.user?.plan ||
     data?.subscription?.plan;
 
-  const isPro =
+  if (
     String(plan)
       .toLowerCase() ===
-    "pro";
-
-  if (planBadge) {
+    "pro"
+  ) {
     planBadge.textContent =
-      isPro ? "Pro" : "Free";
+      "👑 PRO";
 
-    planBadge.classList.toggle(
-      "pro",
-      isPro
+    planBadge.classList.add(
+      "pro"
     );
-  }
 
-  if (usageLimitsBtn) {
-    usageLimitsBtn.classList.toggle(
-      "pro",
-      isPro
-    );
-  }
-
-  if (sidebarPlanBadge) {
-    const label =
-      sidebarPlanBadge.querySelector(
-        "span"
-      );
-
-    const sub =
-      sidebarPlanBadge.querySelector(
-        "small"
-      );
-
-    if (label) {
-      label.textContent =
-        isPro
-          ? "Pro plan"
-          : "Free plan";
-    }
-
-    if (sub) {
-      sub.textContent =
-        isPro
-          ? "Thank you 👑"
-          : "Upgrade for more";
-    }
-
-    sidebarPlanBadge.classList.toggle(
-      "pro",
-      isPro
-    );
-  }
-}
-
-/* ============================================================
-   📊 USAGE BAR
-   ------------------------------------------------------------
-   Renders the daily usage percentage inside the bar itself, and
-   keeps the full snapshot (messages/images/tokens) around so
-   "View usage limits" can show a detailed breakdown on demand.
-   Accepts either a raw usage snapshot ({messages:{used,limit},
-   images:{...}, tokens:{...}}) or a wrapper object that has one
-   nested under .usage — both shapes show up depending on whether
-   the data came from the streaming "done" event (chat.js's
-   getUsageSnapshot() result directly) or from /api/user.
-   Pro/unlimited plans (no numeric message limit) hide the bar.
-============================================================ */
-
-let lastUsageSnapshot = null;
-
-function updateUsageBar(source) {
-  const usage = source?.messages ? source : source?.usage;
-
-  if (!usageBarWrap || !usageBarFill || !usageBarPercent) {
     return;
   }
 
-  const messages = usage?.messages;
-  const limit = Number(messages?.limit);
+  planBadge.textContent =
+    "FREE";
 
-  if (!messages || !Number.isFinite(limit) || limit <= 0) {
-    usageBarWrap.classList.add("hidden");
-    lastUsageSnapshot = null;
-    return;
-  }
-
-  lastUsageSnapshot = usage;
-
-  const used = Math.max(0, Number(messages.used) || 0);
-  const percent = Math.min(100, Math.round((used / limit) * 100));
-
-  usageBarWrap.classList.remove("hidden");
-
-  usageBarFill.style.width = percent + "%";
-
-  usageBarFill.classList.toggle(
-    "usageBarWarn",
-    percent >= 70 && percent < 100
+  planBadge.classList.remove(
+    "pro"
   );
-
-  usageBarFill.classList.toggle(
-    "usageBarFull",
-    percent >= 100
-  );
-
-  usageBarPercent.textContent = `${percent}%`;
-}
-
-function formatUsageLimitRow(label, stat) {
-  if (!stat || !Number.isFinite(Number(stat.limit))) {
-    return `<div class="usageLimitsRow"><span>${escapeHTML(label)}</span><b>Unlimited</b></div>`;
-  }
-
-  const used = Math.max(0, Number(stat.used) || 0);
-  const limit = Number(stat.limit);
-
-  return (
-    `<div class="usageLimitsRow"><span>${escapeHTML(label)}</span>` +
-    `<b>${used} / ${limit}</b></div>`
-  );
-}
-
-function openUsageLimitsModal() {
-  if (!lastUsageSnapshot) {
-    showToast("⚠️ Usage info isn't loaded yet");
-    return;
-  }
-
-  openModal(
-    `
-      <h3>📊 Your Usage Today</h3>
-      <p>Resets daily. Upgrade to Pro for higher limits.</p>
-
-      <div class="modalField">
-        ${formatUsageLimitRow("💬 Messages", lastUsageSnapshot.messages)}
-        ${formatUsageLimitRow("🎨 Images", lastUsageSnapshot.images)}
-        ${formatUsageLimitRow("🔢 Tokens", lastUsageSnapshot.tokens)}
-      </div>
-
-      <div class="modalActions">
-        <button id="usageLimitsCloseBtn">Close</button>
-        <button class="primaryBtn" id="usageLimitsUpgradeBtn">👑 Upgrade to Pro</button>
-      </div>
-    `
-  );
-
-  document
-    .getElementById("usageLimitsCloseBtn")
-    ?.addEventListener("click", closeModal);
-
-  document
-    .getElementById("usageLimitsUpgradeBtn")
-    ?.addEventListener("click", () => {
-      closeModal();
-      openProPaymentModal();
-    });
-}
-
-if (usageLimitsBtn) {
-  usageLimitsBtn.addEventListener("click", openUsageLimitsModal);
 }
 
 /* ============================================================
@@ -3422,8 +3211,6 @@ async function sendMessage() {
   if (isSending) {
     return;
   }
-
-  userStoppedGeneration = false;
 
   const message =
     String(
@@ -3467,9 +3254,13 @@ async function sendMessage() {
     );
   }
 
-  chatBox
-    ?.querySelector(".welcome-card")
-    ?.remove();
+  document
+    .getElementById(
+      "kirongWelcome"
+    )
+    ?.classList.add(
+      "hideWelcome"
+    );
 
   /*
    * Render user message.
@@ -3627,21 +3418,7 @@ async function sendMessage() {
     }
 
     /* ========================================================
-       💬 NORMAL CHAT REQUEST — STREAMED
-       ------------------------------------------------------
-       The backend responds with newline-delimited JSON (NDJSON):
-       one {"type":"chunk","text":...} line per segment as Kirong
-       writes the answer, then a final {"type":"done",...} or
-       {"type":"error",...} line. Early rejections (limits, Pro
-       gate, bad request) instead come back as a single JSON
-       object with no "type" wrapper (e.g. {"ok":false,"error":...}
-       or the older {"text":...} shape).
-
-       IMPORTANT: we do NOT branch on the response's Content-Type
-       header here — on some hosts/proxies it doesn't reliably
-       reach the browser as set server-side. Instead we always
-       read the body as a stream and parse it line-by-line,
-       inferring what we got from the parsed JSON's own shape.
+       💬 NORMAL CHAT REQUEST
     ======================================================== */
 
     const form =
@@ -3661,7 +3438,7 @@ async function sendMessage() {
 
           headers: {
             Accept:
-              "application/x-ndjson, application/json",
+              "application/json",
 
             "X-Kirong-User-Id":
               DEVICE_USER_ID
@@ -3672,235 +3449,123 @@ async function sendMessage() {
         }
       );
 
-    if (!response.ok && (!response.body || !response.body.getReader)) {
-      // No streaming support at all AND a non-2xx status — treat
-      // exactly like the old single-JSON error path.
-      const data = await parseApiResponse(response);
-      throw new Error(extractApiError(data));
+    const data =
+      await parseApiResponse(
+        response
+      );
+
+    if (
+      data?.type ===
+      "error"
+    ) {
+      throw new Error(
+        extractApiError(
+          data
+        )
+      );
     }
 
-    let accumulatedText = "";
-    let sawChunk = false;
-    let imageEvent = null;
-    let legacyEvent = null;
-    let errorMessage = null;
-    let errorCode = null;
-    let liveMessageEl = null;
-    let liveContentEl = null;
-
-    const ensureLiveMessage = () => {
-      if (liveMessageEl) return;
-
-      liveMessageEl = addMessage("assistant", "");
-      liveContentEl = liveMessageEl?.querySelector(".messageContent") || null;
-    };
-
-    const handleEvent = (event) => {
-      if (!event || typeof event !== "object") return;
-
-      if (event.type === "chunk" && typeof event.text === "string") {
-        sawChunk = true;
-        accumulatedText += event.text;
-
-        ensureLiveMessage();
-
-        if (liveContentEl) {
-          liveContentEl.innerHTML = renderMarkdown(accumulatedText);
-        }
-
-        scrollToBottom();
-        return;
-      }
-
-      if (event.type === "done") {
-        if (event.usage) {
-          updateUsageBar(event.usage);
-        }
-        return; // rest of the metadata (provider/model) — nothing to render
-      }
-
-      if (event.type === "error" || event.ok === false) {
-        errorMessage = extractApiError(event);
-        errorCode = event.code || null;
-        return;
-      }
-
-      if (event.type === "image" && event.image) {
-        imageEvent = event;
-        return;
-      }
-
-      // No "type" field at all — the older single-shot response
-      // shape ({text}/{message}/{reply}), or an unrecognized object.
-      if (!event.type) {
-        legacyEvent = event;
-      }
-    };
-
-    if (response.body && response.body.getReader) {
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-
-      let buffer = "";
-
-      try {
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (!line.trim()) continue;
-
-            let event;
-            try {
-              event = JSON.parse(line);
-            } catch {
-              continue; // skip malformed/partial lines
-            }
-
-            handleEvent(event);
-          }
-        }
-
-        // Flush any trailing content left in the buffer with no
-        // final newline.
-        if (buffer.trim()) {
-          try {
-            handleEvent(JSON.parse(buffer));
-          } catch {
-            /* ignore trailing partial line */
-          }
-        }
-      } catch (readError) {
-        if (readError?.name === "AbortError") {
-          // Either the user pressed Stop, or the request hit
-          // REQUEST_TIMEOUT — either way, keep whatever text has
-          // already streamed in instead of discarding it. Which
-          // note to attach (below) depends on which of those two
-          // it was, via the userStoppedGeneration flag.
-        } else {
-          throw readError;
-        }
-      }
-    } else {
-      // No streaming reader available — read the whole body once
-      // and process it the same way, just without live updates.
-      const wholeText = await response.text();
-
-      wholeText
-        .split("\n")
-        .filter((line) => line.trim())
-        .forEach((line) => {
-          try {
-            handleEvent(JSON.parse(line));
-          } catch {
-            /* ignore malformed line */
-          }
-        });
+    if (
+      data?.ok === false
+    ) {
+      throw new Error(
+        extractApiError(
+          data
+        )
+      );
     }
 
-    // ----------------------------------------------------------
-    // RESOLVE WHAT WE GOT
-    // ----------------------------------------------------------
+    /* ========================================================
+       🖼️ IMAGE RESPONSE FROM CHAT API
+    ======================================================== */
 
-    if (userStoppedGeneration && !sawChunk && !imageEvent && !legacyEvent) {
-      // Stopped before anything was written — quietly drop the
-      // empty live bubble, no error, no assistant message needed.
-      liveMessageEl?.remove();
-
-      selectedFile = null;
-      if (fileInput) fileInput.value = "";
-      renderFilePreview();
-      saveCurrentChat();
-
-      return;
-    }
-
-    if (userStoppedGeneration && sawChunk) {
-      accumulatedText += "\n\n⏹️ *(stopped)*";
-      if (liveContentEl) {
-        liveContentEl.innerHTML = renderMarkdown(accumulatedText);
-      }
-    } else if (errorMessage && !sawChunk && !imageEvent && !legacyEvent) {
-      liveMessageEl?.remove();
-      const err = new Error(errorMessage);
-      if (errorCode) err.code = errorCode;
-      throw err;
-    } else if (errorMessage && sawChunk) {
-      // Partial answer was shown, then the stream failed — keep
-      // what was written and append a short note instead of
-      // discarding it.
-      accumulatedText += "\n\n⚠️ *(connection dropped — response may be incomplete)*";
-      if (liveContentEl) {
-        liveContentEl.innerHTML = renderMarkdown(accumulatedText);
-      }
-    }
-
-    if (imageEvent) {
-      liveMessageEl?.remove();
-
+    if (
+      data?.type ===
+        "image" &&
+      data?.image
+    ) {
       addImageMessage(
-        imageEvent.text || "🎨 Here is your image!",
-        imageEvent.image,
-        imageEvent.provider || "",
-        imageEvent.prompt || visibleMessage
+        data.text ||
+          "🎨 Here is your image!",
+        data.image,
+        data.provider ||
+          "",
+        data.prompt ||
+          visibleMessage
       );
 
-      addToHistory("assistant", imageEvent.text || "Generated image", {
-        image: imageEvent.image,
-        imagePrompt: imageEvent.prompt || visibleMessage,
-        provider: imageEvent.provider
-      });
-    } else if (sawChunk) {
-      // Re-render once more through the full addMessage() markup so
-      // the finished bubble gets its Copy/Listen/Retry actions, same
-      // as any other assistant message.
-      liveMessageEl?.remove();
-      addMessage("assistant", accumulatedText || "No response received.");
-      addToHistory("assistant", accumulatedText || "No response received.");
+      addToHistory(
+        "assistant",
+        data.text ||
+          "Generated image",
+        {
+          image:
+            data.image,
 
-      if (voiceRepliesEnabled && accumulatedText) {
-        const lastAssistant = chatBox?.querySelector(
-          ".message.assistant-message:last-child .speakMessageBtn"
-        );
-        speakText(accumulatedText, lastAssistant);
-      }
-    } else if (legacyEvent) {
-      const answer = String(
-        legacyEvent.text || legacyEvent.message || legacyEvent.reply || "No response received."
+          imagePrompt:
+            data.prompt ||
+            visibleMessage,
+
+          provider:
+            data.provider
+        }
       );
-
-      addMessage("assistant", answer);
-      addToHistory("assistant", answer);
-
-      if (voiceRepliesEnabled) {
-        const lastAssistant = chatBox?.querySelector(
-          ".message.assistant-message:last-child .speakMessageBtn"
-        );
-        speakText(answer, lastAssistant);
-      }
     } else {
-      addMessage("assistant", "No response received.");
-      addToHistory("assistant", "No response received.");
+      /* ======================================================
+         🤖 NORMAL AI RESPONSE
+      ====================================================== */
+
+      const answer =
+        String(
+          data?.text ||
+            data?.message ||
+            data?.reply ||
+            "No response received."
+        );
+
+      addMessage(
+        "assistant",
+        answer
+      );
+
+      addToHistory(
+        "assistant",
+        answer
+      );
+
+      if (
+        voiceRepliesEnabled
+      ) {
+        const lastAssistant =
+          chatBox?.querySelector(
+            ".message.assistant-message:last-child .speakMessageBtn"
+          );
+
+        speakText(
+          answer,
+          lastAssistant
+        );
+      }
     }
 
-    selectedFile = null;
-    if (fileInput) fileInput.value = "";
+    selectedFile =
+      null;
+
+    if (fileInput) {
+      fileInput.value =
+        "";
+    }
+
     renderFilePreview();
+
     saveCurrentChat();
+
+    /*
+     * Optional usage refresh.
+     */
+
     refreshUserData();
   } catch (error) {
-    if (userStoppedGeneration && error?.name === "AbortError") {
-      // Stopped before the response even started arriving —
-      // nothing to show, just stop quietly.
-      return;
-    }
-
     if (error?.code === "PRO_FEATURE") {
       const toolLabel =
         MODE_LABELS[activeMode]?.label || "This feature";
@@ -4541,7 +4206,8 @@ async function apiFetchProjects() {
     !data.ok
   ) {
     throw new Error(
-      extractApiError(data)
+      data?.error ||
+        `Server ${response.status}`
     );
   }
 
@@ -4603,7 +4269,8 @@ async function apiCreateProject({
     !data.ok
   ) {
     throw new Error(
-      extractApiError(data)
+      data?.error ||
+        `Server ${response.status}`
     );
   }
 
@@ -4664,7 +4331,8 @@ async function apiUpdateProject({
     !data.ok
   ) {
     throw new Error(
-      extractApiError(data)
+      data?.error ||
+        `Server ${response.status}`
     );
   }
 
@@ -4709,7 +4377,8 @@ async function apiDeleteProject(
     !data.ok
   ) {
     throw new Error(
-      extractApiError(data)
+      data?.error ||
+        `Server ${response.status}`
     );
   }
 }
@@ -5753,11 +5422,7 @@ async function initiateProPayment() {
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok || !data.ok) {
-      throw new Error(
-        response.ok
-          ? extractApiError(data)
-          : `${extractApiError(data)} (Server ${response.status})`
-      );
+      throw new Error(data?.error || `Server ${response.status}`);
     }
 
     if (statusBox) {
@@ -5848,200 +5513,8 @@ async function pollPaymentStatus(checkoutRequestId, statusBox, payBtn) {
   }
 }
 
-// Note: #planBadge is now a <span> nested inside #usageLimitsBtn
-// (not its own clickable element), so it no longer needs its own
-// click handler — usageLimitsBtn's listener (below) already covers
-// this area, and the "Upgrade to Pro" path stays reachable via the
-// usage-limits modal's own Upgrade button.
-
-/* ============================================================
-   🎁 REFERRAL SYSTEM — "Invite & Earn"
-   ------------------------------------------------------------
-   Each user's referral code IS their DEVICE_USER_ID, base64url-
-   encoded by the backend — no separate signup flow needed. A
-   friend opening the link with ?ref=CODE gets the code stored
-   locally, then redeemed automatically (once) via POST, granting
-   both sides a Pro trial per /api/referral.js's logic.
-============================================================ */
-
-const REFERRAL_ENDPOINT = "/api/referral";
-const REFERRAL_PENDING_KEY = "kirong_pending_referral_v1";
-const REFERRAL_REDEEMED_KEY = "kirong_referral_redeemed_v1";
-
-const referralToolCard = document.getElementById("referralToolCard");
-
-// --------------------------------------------------------
-// 🔗 CAPTURE ?ref=CODE FROM THE URL ON FIRST LOAD
-// --------------------------------------------------------
-
-function captureReferralFromUrl() {
-  try {
-    const params = new URLSearchParams(window.location.search);
-    const ref = params.get("ref");
-
-    if (!ref) return;
-
-    // Never overwrite an already-redeemed state, and don't bother
-    // storing a link to yourself if someone shares their own link
-    // back to their own browser/device.
-    if (localStorage.getItem(REFERRAL_REDEEMED_KEY)) return;
-
-    localStorage.setItem(REFERRAL_PENDING_KEY, ref);
-
-    // Clean the URL so refreshing/sharing it again doesn't re-post.
-    params.delete("ref");
-    const cleanUrl =
-      window.location.pathname +
-      (params.toString() ? `?${params.toString()}` : "") +
-      window.location.hash;
-    window.history.replaceState({}, document.title, cleanUrl);
-  } catch {
-    /* localStorage/URL access can fail in some embedded contexts — ignore */
-  }
-}
-
-async function redeemPendingReferral() {
-  let pendingCode = null;
-
-  try {
-    if (localStorage.getItem(REFERRAL_REDEEMED_KEY)) return;
-    pendingCode = localStorage.getItem(REFERRAL_PENDING_KEY);
-  } catch {
-    return;
-  }
-
-  if (!pendingCode) return;
-
-  try {
-    const response = await fetch(REFERRAL_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "X-Kirong-User-Id": DEVICE_USER_ID
-      },
-      body: JSON.stringify({ userId: DEVICE_USER_ID, code: pendingCode })
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (response.ok && data.ok) {
-      try {
-        localStorage.setItem(REFERRAL_REDEEMED_KEY, "true");
-        localStorage.removeItem(REFERRAL_PENDING_KEY);
-      } catch {}
-
-      showToast("🎁 Referral applied — enjoy your free Pro days!");
-      refreshUserData();
-    } else if (data.code === "ALREADY_REDEEMED") {
-      // Not this device's first redemption attempt somehow — stop
-      // retrying it every load.
-      try {
-        localStorage.setItem(REFERRAL_REDEEMED_KEY, "true");
-        localStorage.removeItem(REFERRAL_PENDING_KEY);
-      } catch {}
-    }
-    // Any other error (e.g. own-link, invalid code): leave it stored
-    // in case it was a transient network issue, but don't bother the
-    // user with an error toast for something they didn't explicitly
-    // trigger themselves.
-  } catch {
-    // network hiccup — will retry next launch since we didn't clear it
-  }
-}
-
-// --------------------------------------------------------
-// 🖼️ INVITE MODAL
-// --------------------------------------------------------
-
-async function openReferralModal() {
-  openModal(
-    `
-      <h3>🎁 Invite & Earn</h3>
-      <p>Give friends a free trial of Kirong AI Pro. When they join, you both get bonus Pro days 👑</p>
-      <div class="modalField" id="referralLoading">
-        <p class="emptyText">Loading your invite link...</p>
-      </div>
-    `
-  );
-
-  try {
-    const response = await fetch(
-      `${REFERRAL_ENDPOINT}?userId=${encodeURIComponent(DEVICE_USER_ID)}`,
-      {
-        headers: { Accept: "application/json", "X-Kirong-User-Id": DEVICE_USER_ID },
-        cache: "no-store"
-      }
-    );
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok || !data.ok) {
-      throw new Error(
-        response.ok
-          ? extractApiError(data)
-          : `${extractApiError(data)} (Server ${response.status})`
-      );
-    }
-
-    renderReferralModalContent(data);
-  } catch (error) {
-    const loadingBox = document.getElementById("referralLoading");
-    if (loadingBox) {
-      loadingBox.innerHTML = `<p class="emptyText">⚠️ ${friendlyError(error)}</p>`;
-    }
-  }
-}
-
-function renderReferralModalContent(data) {
-  const modalBox = document.querySelector("#kirongModalOverlay .modalBox");
-  if (!modalBox) return;
-
-  const whatsappShareText = encodeURIComponent(
-    `Karibu Kirong AI 👑 — nikualike ujaribu, umepata siku ${data.rewardDaysForNewUser} za Pro bure: ${data.link}`
-  );
-
-  modalBox.innerHTML = `
-    <h3>🎁 Invite & Earn</h3>
-    <p>Give friends a free trial of Kirong AI Pro. When they join, you both get bonus Pro days 👑</p>
-
-    <div class="modalField">
-      <label>Your invite link</label>
-      <input type="text" id="referralLinkInput" value="${escapeHTML(data.link)}" readonly />
-    </div>
-
-    <div class="modalActions">
-      <button id="referralCopyBtn">📋 Copy Link</button>
-      <a class="primaryBtn" id="referralWhatsappBtn"
-         href="https://wa.me/?text=${whatsappShareText}"
-         target="_blank" rel="noopener noreferrer">📱 Share on WhatsApp</a>
-    </div>
-
-    <div class="proFeatureList" style="margin-top:16px">
-      <div>👥 Friends invited: <b>${Number(data.referralCount) || 0}</b></div>
-      <div>👑 ${
-        data.trialActive
-          ? `Pro trial active until ${new Date(data.proTrialUntil).toLocaleDateString()}`
-          : "No active trial right now — invite someone to start earning days!"
-      }</div>
-    </div>
-
-    <div class="modalActions">
-      <button id="referralCloseBtn">Close</button>
-    </div>
-  `;
-
-  document
-    .getElementById("referralCloseBtn")
-    ?.addEventListener("click", closeModal);
-
-  document
-    .getElementById("referralCopyBtn")
-    ?.addEventListener("click", () => copyText(data.link));
-}
-
-if (referralToolCard) {
-  referralToolCard.addEventListener("click", openReferralModal);
+if (planBadge) {
+  planBadge.addEventListener("click", openProPaymentModal);
 }
 
 /* ============================================================
@@ -6126,7 +5599,7 @@ document.addEventListener(
       isSending &&
       activeAbortController
     ) {
-      stopGenerating();
+      activeAbortController.abort();
 
       showToast(
         "⏹️ Request stopped"
@@ -6134,6 +5607,34 @@ document.addEventListener(
     }
   }
 );
+
+/* ============================================================
+   🧩 QUICK QA BUTTONS
+============================================================ */
+
+document
+  .querySelectorAll(
+    ".qa"
+  )
+  .forEach((button) => {
+    button.addEventListener(
+      "click",
+      () => {
+        if (!userInput) {
+          return;
+        }
+
+        userInput.value =
+          button.dataset
+            .prompt ||
+          "";
+
+        autoResizeInput();
+
+        userInput.focus();
+      }
+    );
+  });
 
 /* ============================================================
    🆕 NEW CHAT
@@ -6153,13 +5654,7 @@ if (newChatBtn) {
 if (sendBtn) {
   sendBtn.addEventListener(
     "click",
-    () => {
-      if (isSending) {
-        stopGenerating();
-      } else {
-        sendMessage();
-      }
-    }
+    sendMessage
   );
 }
 
@@ -6224,10 +5719,6 @@ const TRANSLATIONS = {
     tabProjects: "📁 Projects",
     tabTools: "🛠️ Tools",
     tabHistory: "🕘 History",
-    tabMore: "✨ More",
-    sidebarNewChat: "New chat",
-    sidebarSearchPlaceholder: "Search chats...",
-    sidebarRecents: "Recents",
     tabSchool: "🎓 School",
     coreLabel: "KIRONG AI CORE",
     welcomePrefix: "Welcome,",
@@ -6276,10 +5767,6 @@ const TRANSLATIONS = {
     tabProjects: "📁 Miradi",
     tabTools: "🛠️ Zana",
     tabHistory: "🕘 Historia",
-    tabMore: "✨ Zaidi",
-    sidebarNewChat: "Ongea Mpya",
-    sidebarSearchPlaceholder: "Tafuta mazungumzo...",
-    sidebarRecents: "Ya Karibuni",
     tabSchool: "🎓 Shule",
     coreLabel: "KIRONG AI CORE",
     welcomePrefix: "Karibu,",
@@ -6328,10 +5815,6 @@ const TRANSLATIONS = {
     tabProjects: "📁 Projets",
     tabTools: "🛠️ Outils",
     tabHistory: "🕘 Historique",
-    tabMore: "✨ Plus",
-    sidebarNewChat: "Nouvelle discussion",
-    sidebarSearchPlaceholder: "Rechercher des discussions...",
-    sidebarRecents: "Récents",
     tabSchool: "🎓 École",
     coreLabel: "KIRONG AI CORE",
     welcomePrefix: "Bienvenue,",
@@ -6380,10 +5863,6 @@ const TRANSLATIONS = {
     tabProjects: "📁 Proyectos",
     tabTools: "🛠️ Herramientas",
     tabHistory: "🕘 Historial",
-    tabMore: "✨ Más",
-    sidebarNewChat: "Nuevo chat",
-    sidebarSearchPlaceholder: "Buscar chats...",
-    sidebarRecents: "Recientes",
     tabSchool: "🎓 Escuela",
     coreLabel: "KIRONG AI CORE",
     welcomePrefix: "Bienvenido,",
@@ -6432,10 +5911,6 @@ const TRANSLATIONS = {
     tabProjects: "📁 प्रोजेक्ट्स",
     tabTools: "🛠️ टूल्स",
     tabHistory: "🕘 इतिहास",
-    tabMore: "✨ और",
-    sidebarNewChat: "नई चैट",
-    sidebarSearchPlaceholder: "चैट खोजें...",
-    sidebarRecents: "हाल की",
     tabSchool: "🎓 स्कूल",
     coreLabel: "KIRONG AI CORE",
     welcomePrefix: "स्वागत है,",
@@ -6495,29 +5970,11 @@ function applyTranslations() {
     }
   });
 
-  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
-    const key = el.dataset.i18nPlaceholder;
-    if (dict[key]) {
-      el.placeholder = dict[key];
-    }
-  });
-
   document.documentElement.lang =
     { English: "en", Swahili: "sw", French: "fr", Spanish: "es", Hindi: "hi" }[lang] || "en";
 
   if (languageBtn) {
     languageBtn.title = dict.languagePickerTitle;
-
-    const flagSpan =
-      document.getElementById(
-        "languageBtnFlag"
-      );
-
-    if (flagSpan) {
-      flagSpan.textContent =
-        LANGUAGE_FLAGS[lang] ||
-        "🇬🇧";
-    }
   }
 
   if (userInput && !imageModeOn) {
@@ -6599,19 +6056,14 @@ function initOnboarding() {
 
   onboardingOverlay.classList.remove("hidden");
 
-  // The first option ("Personal") comes pre-selected in the static
-  // markup, so start from that instead of requiring a click before
-  // Continue does anything useful.
-  selectedOnboardingRole = "personal";
-
   document.querySelectorAll(".onboardingOption").forEach((btn) => {
     btn.addEventListener("click", () => {
       document
         .querySelectorAll(".onboardingOption")
-        .forEach((b) => b.classList.remove("active"));
+        .forEach((b) => b.classList.remove("selected"));
 
-      btn.classList.add("active");
-      selectedOnboardingRole = btn.dataset.value;
+      btn.classList.add("selected");
+      selectedOnboardingRole = btn.dataset.onboardingRole;
 
       if (finishOnboardingBtn) {
         finishOnboardingBtn.disabled = false;
@@ -6638,7 +6090,7 @@ function initOnboarding() {
 
     closeOnboarding();
 
-    if (selectedOnboardingRole === "student") {
+    if (selectedOnboardingRole === "school") {
       setActiveMode("school");
     }
 
@@ -6654,8 +6106,6 @@ function initOnboarding() {
 ============================================================ */
 
 function init() {
-  captureReferralFromUrl();
-
   applyTranslations();
 
   initOnboarding();
@@ -6677,8 +6127,6 @@ function init() {
   autoResizeInput();
 
   refreshUserData();
-
-  redeemPendingReferral();
 
   console.log(
     "⚡ KIRONG AI V11 MANSION READY"
