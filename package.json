@@ -1,0 +1,11 @@
+{
+  "name": "kirong-ai",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "openai": "^4.68.0",
+    "groq-sdk": "^0.7.0",
+    "formidable": "^3.5.1",
+    "@vercel/blob": "^0.27.0"
+  }
+}
