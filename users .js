@@ -1,21 +1,30 @@
 // ============================================================
-// 👑 KIRONG AI — USER STORAGE (Vercel Blob)
-// ------------------------------------------------------------
-// This is the file that was always missing from the Vercel side
-// — chat.js, referral.js, and plans.js all import from it, but
-// I never saw your original version (if one ever existed). Built
-// to match the exact same storage pattern already used in your
-// payment.js and projects.js: @vercel/blob, private access,
-// BLOB_READ_WRITE_TOKEN, same BlobNotFoundError handling.
+// 👑 KIRONG AI — USER STORAGE V14
+// Vercel Blob + User Profiles + Usage
 // ============================================================
 
 "use strict";
 
-import { put, get } from "@vercel/blob";
-import { createDefaultUser } from "./plans.js";
+import {
+  put,
+  get
+} from "@vercel/blob";
 
-const TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
-const USER_PREFIX = "kirong-ai/users/";
+import {
+  createDefaultUser,
+  resetDailyUsageIfNeeded,
+  normalizePlan
+} from "./plans.js";
+
+const TOKEN =
+  process.env.BLOB_READ_WRITE_TOKEN;
+
+const USER_PREFIX =
+  "kirong-ai/users/";
+
+// ============================================================
+// 🔐 SAFE ID
+// ============================================================
 
 function safeId(id) {
   return String(id || "anonymous")
@@ -24,38 +33,94 @@ function safeId(id) {
     .slice(0, 100);
 }
 
+// ============================================================
+// 📁 PATH
+// ============================================================
+
 function userPath(userId) {
   return `${USER_PREFIX}${safeId(userId)}.json`;
 }
 
 // ============================================================
-// 📥 READ (same BlobNotFoundError handling as payment.js/projects.js)
+// 🔐 TOKEN
 // ============================================================
 
-async function readUser(userId) {
-  try {
-    const result = await get(userPath(userId), {
-      token: TOKEN,
-      access: "private",
-      useCache: false
-    });
+function requireToken() {
+  if (!TOKEN) {
+    throw new Error(
+      "BLOB_READ_WRITE_TOKEN is missing."
+    );
+  }
+}
 
-    if (!result || result.statusCode !== 200 || !result.stream) {
+// ============================================================
+// 📥 GET
+// ============================================================
+
+export async function getUser(userId) {
+  requireToken();
+
+  const id = safeId(userId);
+
+  try {
+    const result = await get(
+      userPath(id),
+      {
+        token: TOKEN,
+        access: "private",
+        useCache: false
+      }
+    );
+
+    if (
+      !result ||
+      result.statusCode !== 200 ||
+      !result.stream
+    ) {
       return null;
     }
 
-    const text = await new Response(result.stream).text();
+    const text =
+      await new Response(
+        result.stream
+      ).text();
+
+    let user;
 
     try {
-      return JSON.parse(text);
+      user = JSON.parse(text);
     } catch {
       return null;
     }
-  } catch (error) {
-    const message = String(error?.message || "").toLowerCase();
 
     if (
-      error?.name === "BlobNotFoundError" ||
+      !user ||
+      typeof user !== "object"
+    ) {
+      return null;
+    }
+
+    user.userId =
+      safeId(
+        user.userId || id
+      );
+
+    resetDailyUsageIfNeeded(user);
+
+    normalizePlan(user);
+
+    return user;
+  }
+
+  catch (error) {
+    const message =
+      String(
+        error?.message || ""
+      ).toLowerCase();
+
+    if (
+      error?.name ===
+        "BlobNotFoundError" ||
       message.includes("not found") ||
       message.includes("does not exist") ||
       message.includes("404")
@@ -68,46 +133,172 @@ async function readUser(userId) {
 }
 
 // ============================================================
-// 💾 WRITE
+// 💾 SAVE
 // ============================================================
 
-async function writeUser(user) {
-  await put(userPath(user.id), JSON.stringify(user, null, 2), {
-    token: TOKEN,
-    access: "private",
-    contentType: "application/json",
-    addRandomSuffix: false,
-    allowOverwrite: true
-  });
+export async function saveUser(user) {
+  requireToken();
 
-  return user;
+  if (
+    !user ||
+    typeof user !== "object"
+  ) {
+    throw new Error(
+      "Invalid user object."
+    );
+  }
+
+  if (!user.userId) {
+    throw new Error(
+      "Cannot save user without userId."
+    );
+  }
+
+  user.userId =
+    safeId(user.userId);
+
+  resetDailyUsageIfNeeded(user);
+
+  normalizePlan(user);
+
+  user.updatedAt =
+    new Date().toISOString();
+
+  const blob =
+    await put(
+      userPath(user.userId),
+
+      JSON.stringify(
+        user,
+        null,
+        2
+      ),
+
+      {
+        token: TOKEN,
+
+        access: "private",
+
+        contentType:
+          "application/json",
+
+        addRandomSuffix: false,
+
+        allowOverwrite: true
+      }
+    );
+
+  return {
+    ...user,
+
+    storageUrl:
+      blob?.url || null
+  };
 }
 
 // ============================================================
-// 📤 EXPORTS — same contract chat.js/referral.js/payment-callback.js
-// already expect
+// 👤 GET OR CREATE
 // ============================================================
 
-async function getOrCreateUser(userId) {
+export async function getOrCreateUser(userId) {
   const id = safeId(userId);
-  const existing = await readUser(id);
 
-  if (existing && typeof existing === "object") {
-    // Backfill any fields older records might be missing.
-    return { ...createDefaultUser(id), ...existing, id };
+  let user =
+    await getUser(id);
+
+  if (user) {
+    resetDailyUsageIfNeeded(user);
+    normalizePlan(user);
+
+    return user;
   }
 
-  const fresh = createDefaultUser(id);
-  await writeUser(fresh);
-  return fresh;
+  user =
+    createDefaultUser(id);
+
+  return await saveUser(user);
 }
 
-async function saveUser(user) {
-  if (!user?.id) {
-    throw new Error("users.js: cannot save a user with no id.");
+// ============================================================
+// 🔄 UPDATE
+// ============================================================
+
+export async function updateUser(
+  userId,
+  updates = {}
+) {
+  const user =
+    await getOrCreateUser(userId);
+
+  if (
+    !updates ||
+    typeof updates !== "object"
+  ) {
+    throw new Error(
+      "Invalid user updates."
+    );
   }
 
-  return await writeUser(user);
+  const {
+    userId: ignoredUserId,
+    createdAt: ignoredCreatedAt,
+    usage: ignoredUsage,
+    plan: ignoredPlan,
+    subscription: ignoredSubscription,
+    ...safeUpdates
+  } = updates;
+
+  Object.assign(
+    user,
+    safeUpdates
+  );
+
+  user.userId =
+    safeId(userId);
+
+  return await saveUser(user);
 }
 
-export { getOrCreateUser, saveUser };
+// ============================================================
+// 📊 USAGE
+// ============================================================
+
+export async function getUserUsage(userId) {
+  const user =
+    await getOrCreateUser(userId);
+
+  return {
+    userId: user.userId,
+
+    plan: user.plan,
+
+    usage: user.usage,
+
+    subscription:
+      user.subscription || null
+  };
+}
+
+// ============================================================
+// 👑 PRO CHECK
+// ============================================================
+
+export async function isProUser(userId) {
+  const user =
+    await getOrCreateUser(userId);
+
+  return (
+    normalizePlan(user) ===
+    "pro"
+  );
+}
+
+// ============================================================
+// 📦 PATH
+// ============================================================
+
+export function getUserStoragePath(userId) {
+  return userPath(
+    safeId(userId)
+  );
+}
