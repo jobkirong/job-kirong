@@ -1,67 +1,304 @@
 // ============================================================
-// 👑 KIRONG AI — USER / PLAN BRIDGE V2 (Vercel)
-// Exposes plan + usage info to the frontend (plan badge, limits)
-// ------------------------------------------------------------
-// ⚠️ FIX from your original: it referenced `user.userId` and
-// `user.subscription` — neither field exists on the user object
-// this system's plans.js/users.js actually produce (the id field
-// is `user.id`, and there's no separate subscription object; Pro
-// access is tracked entirely via `proTrialUntil`, extended by both
-// referral.js and payment-callback.js). Everything else is
-// unchanged from what you sent.
+// 👑 KIRONG AI — USER STORAGE V14
+// Vercel Blob + User Profiles + Usage
 // ============================================================
 
 "use strict";
 
-import { getOrCreateUser } from "../users.js";
-import { getUsageSnapshot, getUserPlan } from "../plans.js";
+import {
+  put,
+  get
+} from "@vercel/blob";
 
-function setCors(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, X-Kirong-User-Id");
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
+import {
+  createDefaultUser,
+  resetDailyUsageIfNeeded,
+  normalizePlan
+} from "./plans.js";
+
+const TOKEN =
+  process.env.BLOB_READ_WRITE_TOKEN;
+
+const USER_PREFIX =
+  "kirong-ai/users/";
+
+// ============================================================
+// 🔐 SAFE ID
+// ============================================================
+
+function safeId(id) {
+  return String(id || "anonymous")
+    .trim()
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .slice(0, 100);
 }
 
-function getUserId(req) {
-  const fromQuery = req.query?.userId;
-  const fromHeader = req.headers["x-kirong-user-id"];
-  return String(fromQuery || fromHeader || "anonymous").trim().slice(0, 100);
+// ============================================================
+// 📁 PATH
+// ============================================================
+
+function userPath(userId) {
+  return `${USER_PREFIX}${safeId(userId)}.json`;
 }
 
-export default async function handler(req, res) {
-  setCors(res);
+// ============================================================
+// 🔐 TOKEN
+// ============================================================
 
-  if (req.method === "OPTIONS") {
-    return res.status(204).end();
+function requireToken() {
+  if (!TOKEN) {
+    throw new Error(
+      "BLOB_READ_WRITE_TOKEN is missing."
+    );
   }
+}
 
-  if (req.method !== "GET") {
-    return res.status(405).json({ ok: false, error: "Method not allowed." });
-  }
+// ============================================================
+// 📥 GET
+// ============================================================
+
+export async function getUser(userId) {
+  requireToken();
+
+  const id = safeId(userId);
 
   try {
-    const userId = getUserId(req);
-    const user = await getOrCreateUser(userId);
-    const plan = getUserPlan(user);
-    const usage = getUsageSnapshot(user);
+    const result = await get(
+      userPath(id),
+      {
+        token: TOKEN,
+        access: "private",
+        useCache: false
+      }
+    );
 
-    return res.status(200).json({
-      ok: true,
-      userId: user.id,
-      plan: plan.id,
-      planLabel: plan.label,
-      usage,
-      proTrialUntil: user.proTrialUntil || null,
-      referralCount: Number(user.referralCount) || 0
-    });
-  } catch (error) {
-    console.error("KIRONG USER ERROR:", error);
+    if (
+      !result ||
+      result.statusCode !== 200 ||
+      !result.stream
+    ) {
+      return null;
+    }
 
-    return res.status(500).json({
-      ok: false,
-      error: "Could not load account info.",
-      code: "USER_SERVER_ERROR"
-    });
+    const text =
+      await new Response(
+        result.stream
+      ).text();
+
+    let user;
+
+    try {
+      user = JSON.parse(text);
+    } catch {
+      return null;
+    }
+
+    if (
+      !user ||
+      typeof user !== "object"
+    ) {
+      return null;
+    }
+
+    user.userId =
+      safeId(
+        user.userId || id
+      );
+
+    resetDailyUsageIfNeeded(user);
+
+    normalizePlan(user);
+
+    return user;
   }
+
+  catch (error) {
+    const message =
+      String(
+        error?.message || ""
+      ).toLowerCase();
+
+    if (
+      error?.name ===
+        "BlobNotFoundError" ||
+      message.includes("not found") ||
+      message.includes("does not exist") ||
+      message.includes("404")
+    ) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+// ============================================================
+// 💾 SAVE
+// ============================================================
+
+export async function saveUser(user) {
+  requireToken();
+
+  if (
+    !user ||
+    typeof user !== "object"
+  ) {
+    throw new Error(
+      "Invalid user object."
+    );
+  }
+
+  if (!user.userId) {
+    throw new Error(
+      "Cannot save user without userId."
+    );
+  }
+
+  user.userId =
+    safeId(user.userId);
+
+  resetDailyUsageIfNeeded(user);
+
+  normalizePlan(user);
+
+  user.updatedAt =
+    new Date().toISOString();
+
+  const blob =
+    await put(
+      userPath(user.userId),
+
+      JSON.stringify(
+        user,
+        null,
+        2
+      ),
+
+      {
+        token: TOKEN,
+
+        access: "private",
+
+        contentType:
+          "application/json",
+
+        addRandomSuffix: false,
+
+        allowOverwrite: true
+      }
+    );
+
+  return {
+    ...user,
+
+    storageUrl:
+      blob?.url || null
+  };
+}
+
+// ============================================================
+// 👤 GET OR CREATE
+// ============================================================
+
+export async function getOrCreateUser(userId) {
+  const id = safeId(userId);
+
+  let user =
+    await getUser(id);
+
+  if (user) {
+    resetDailyUsageIfNeeded(user);
+    normalizePlan(user);
+
+    return user;
+  }
+
+  user =
+    createDefaultUser(id);
+
+  return await saveUser(user);
+}
+
+// ============================================================
+// 🔄 UPDATE
+// ============================================================
+
+export async function updateUser(
+  userId,
+  updates = {}
+) {
+  const user =
+    await getOrCreateUser(userId);
+
+  if (
+    !updates ||
+    typeof updates !== "object"
+  ) {
+    throw new Error(
+      "Invalid user updates."
+    );
+  }
+
+  const {
+    userId: ignoredUserId,
+    createdAt: ignoredCreatedAt,
+    usage: ignoredUsage,
+    plan: ignoredPlan,
+    subscription: ignoredSubscription,
+    ...safeUpdates
+  } = updates;
+
+  Object.assign(
+    user,
+    safeUpdates
+  );
+
+  user.userId =
+    safeId(userId);
+
+  return await saveUser(user);
+}
+
+// ============================================================
+// 📊 USAGE
+// ============================================================
+
+export async function getUserUsage(userId) {
+  const user =
+    await getOrCreateUser(userId);
+
+  return {
+    userId: user.userId,
+
+    plan: user.plan,
+
+    usage: user.usage,
+
+    subscription:
+      user.subscription || null
+  };
+}
+
+// ============================================================
+// 👑 PRO CHECK
+// ============================================================
+
+export async function isProUser(userId) {
+  const user =
+    await getOrCreateUser(userId);
+
+  return (
+    normalizePlan(user) ===
+    "pro"
+  );
+}
+
+// ============================================================
+// 📦 PATH
+// ============================================================
+
+export function getUserStoragePath(userId) {
+  return userPath(
+    safeId(userId)
+  );
 }
