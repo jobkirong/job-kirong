@@ -49,7 +49,7 @@ function todayKey() {
 
 function createDefaultUser(userId) {
   return {
-    id: userId || null,
+    userId: userId || null,
     plan: "free",
     usage: {
       date: todayKey(),
@@ -59,7 +59,9 @@ function createDefaultUser(userId) {
     },
     referredBy: null,
     referralCount: 0,
-    proTrialUntil: null
+    proTrialUntil: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 }
 
@@ -82,6 +84,20 @@ function ensureUserShape(user) {
     user.usage.tokens = 0;
   }
   return user;
+}
+
+function resetDailyUsageIfNeeded(user) {
+  ensureUserShape(user);
+  return user;
+}
+
+function normalizePlan(user) {
+  ensureUserShape(user);
+  if (!user.plan) {
+    user.plan = "free";
+  }
+  const plan = getUserPlan(user);
+  return plan.id;
 }
 
 function isTrialActive(user) {
@@ -180,6 +196,8 @@ export {
   PRO_PRICE_KES,
   PAID_ACCESS_DAYS,
   createDefaultUser,
+  resetDailyUsageIfNeeded,
+  normalizePlan,
   getUserPlan,
   checkUsageLimit,
   checkTokenLimit,
