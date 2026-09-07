@@ -2,11 +2,10 @@
 // 👑 KIRONG AI — USER / PLAN BRIDGE V1
 // Exposes plan + usage info to the frontend (plan badge, limits)
 // ============================================================
-
 "use strict";
 
-import { getOrCreateUser } from "../users.js";
-import { getUsageSnapshot, getUserPlan } from "../plans.js";
+import { getOrCreateUser } from "./_lib/users.js";
+import { getUsageSnapshot, getUserPlan } from "./_lib/plans.js";
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -48,7 +47,6 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error("KIRONG USER ERROR:", error);
-
     return res.status(500).json({
       ok: false,
       error: "Could not load account info.",
