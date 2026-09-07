@@ -13,7 +13,7 @@ import fs from "fs";
 import {
   getOrCreateUser,
   saveUser
-} from "../users.js";
+} from "./_lib/users.js";
 
 import {
   checkUsageLimit,
@@ -22,7 +22,7 @@ import {
   getUserPlan,
   getUsageSnapshot,
   canUseFeature
-} from "../plans.js";
+} from "./_lib/plans.js";
 
 // ============================================================
 // ⚙️ VERCEL CONFIG
