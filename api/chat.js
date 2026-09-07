@@ -827,7 +827,281 @@ async function callOpenRouter(messages, maxTokens) {
 }
 
 // ============================================================
-// 🧠 AI PROVIDER ROUTER
+// 📡 SSE PARSER (for fetch-based providers: Cerebras, OpenRouter)
+// ------------------------------------------------------------
+// Reads an OpenAI-compatible "data: {...}\n\n" event stream and
+// calls onDelta(text) for each token chunk as it arrives. Returns
+// the full concatenated text plus any usage object the provider
+// sent in its final chunk (not all providers send one).
+// ============================================================
+
+async function consumeSSE(response, onDelta) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+
+  let buffer = "";
+  let fullText = "";
+  let usage = {};
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+
+      const payload = trimmed.slice(5).trim();
+      if (payload === "[DONE]") continue;
+
+      try {
+        const parsed = JSON.parse(payload);
+        const delta = parsed?.choices?.[0]?.delta?.content || "";
+
+        if (delta) {
+          fullText += delta;
+          onDelta(delta);
+        }
+
+        if (parsed?.usage) {
+          usage = parsed.usage;
+        }
+      } catch {
+        // Ignore malformed/partial SSE lines — the next chunk
+        // will usually complete the buffered JSON.
+      }
+    }
+  }
+
+  return { fullText, usage };
+}
+
+// ============================================================
+// 🔥 GROQ (streaming)
+// ============================================================
+
+async function callGroqStream(messages, maxTokens, onDelta) {
+  if (!GROQ_KEYS.length) throw new Error("Groq unavailable.");
+
+  const key = getRandomKey(GROQ_KEYS);
+  const client = new Groq({ apiKey: key });
+
+  const stream = await client.chat.completions.create({
+    model: MODELS.groq,
+    messages,
+    max_tokens: maxTokens,
+    temperature: 0.7,
+    stream: true
+  });
+
+  let fullText = "";
+
+  for await (const chunk of stream) {
+    const delta = chunk?.choices?.[0]?.delta?.content || "";
+    if (delta) {
+      fullText += delta;
+      onDelta(delta);
+    }
+  }
+
+  if (!fullText) throw new Error("Groq returned an empty response.");
+
+  return { provider: "groq", model: MODELS.groq, text: fullText, usage: {} };
+}
+
+// ============================================================
+// 🤖 OPENAI (streaming, vision-capable)
+// ============================================================
+
+async function callOpenAIStream(messages, maxTokens, onDelta) {
+  if (!OPENAI_KEYS.length) throw new Error("OpenAI unavailable.");
+
+  const key = getRandomKey(OPENAI_KEYS);
+  const client = new OpenAI({ apiKey: key });
+
+  const stream = await client.chat.completions.create({
+    model: MODELS.openai,
+    messages,
+    max_tokens: maxTokens,
+    temperature: 0.7,
+    stream: true
+  });
+
+  let fullText = "";
+
+  for await (const chunk of stream) {
+    const delta = chunk?.choices?.[0]?.delta?.content || "";
+    if (delta) {
+      fullText += delta;
+      onDelta(delta);
+    }
+  }
+
+  if (!fullText) throw new Error("OpenAI returned an empty response.");
+
+  return { provider: "openai", model: MODELS.openai, text: fullText, usage: {} };
+}
+
+// ============================================================
+// 🧠 CEREBRAS (streaming via SSE)
+// ============================================================
+
+async function callCerebrasStream(messages, maxTokens, onDelta) {
+  if (!CEREBRAS_KEYS.length) throw new Error("Cerebras unavailable.");
+
+  const key = getRandomKey(CEREBRAS_KEYS);
+
+  const response = await fetchWithTimeout(
+    "https://api.cerebras.ai/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: MODELS.cerebras,
+        messages,
+        max_tokens: maxTokens,
+        temperature: 0.7,
+        stream: true
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Cerebras ${response.status}: ${errorText.slice(0, 300)}`);
+  }
+
+  const { fullText, usage } = await consumeSSE(response, onDelta);
+
+  if (!fullText) throw new Error("Cerebras returned an empty response.");
+
+  return { provider: "cerebras", model: MODELS.cerebras, text: fullText, usage };
+}
+
+// ============================================================
+// 🌐 OPENROUTER (streaming via SSE — vision-capable model)
+// ============================================================
+
+async function callOpenRouterStream(messages, maxTokens, onDelta) {
+  if (!OPENROUTER_KEYS.length) throw new Error("OpenRouter unavailable.");
+
+  const key = getRandomKey(OPENROUTER_KEYS);
+
+  const response = await fetchWithTimeout(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${key}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://kirongjob.vercel.app",
+        "X-Title": "Kirong AI"
+      },
+      body: JSON.stringify({
+        model: MODELS.openrouter,
+        messages,
+        max_tokens: maxTokens,
+        temperature: 0.7,
+        stream: true
+      })
+    }
+  );
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenRouter ${response.status}: ${errorText.slice(0, 300)}`);
+  }
+
+  const { fullText, usage } = await consumeSSE(response, onDelta);
+
+  if (!fullText) throw new Error("OpenRouter returned an empty response.");
+
+  return { provider: "openrouter", model: MODELS.openrouter, text: fullText, usage };
+}
+
+// ============================================================
+// 🧠 STREAMING AI PROVIDER ROUTER
+// ------------------------------------------------------------
+// Mirrors generateAIResponse's provider ordering, but drives
+// onDelta(text) as each chunk arrives. IMPORTANT: once a provider
+// has emitted at least one chunk, we can no longer silently fall
+// back to another provider (the client has already started
+// rendering partial text) — a mid-stream failure at that point is
+// surfaced as a stream error instead of retried.
+// ============================================================
+
+async function streamAIResponse({ messages, maxTokens, isPro, needsVision = false, onDelta }) {
+  const providers = [];
+
+  if (needsVision) {
+    providers.push(["openai", callOpenAIStream], ["openrouter", callOpenRouterStream]);
+  } else if (isPro) {
+    providers.push(
+      ["cerebras", callCerebrasStream],
+      ["groq", callGroqStream],
+      ["openai", callOpenAIStream],
+      ["openrouter", callOpenRouterStream]
+    );
+  } else {
+    providers.push(
+      ["groq", callGroqStream],
+      ["cerebras", callCerebrasStream],
+      ["openrouter", callOpenRouterStream],
+      ["openai", callOpenAIStream]
+    );
+  }
+
+  const errors = [];
+
+  for (const [name, fn] of providers) {
+    let emittedAnyChunk = false;
+
+    try {
+      return await fn(messages, maxTokens, (delta) => {
+        emittedAnyChunk = true;
+        onDelta(delta);
+      });
+    } catch (error) {
+      console.error(`${name.toUpperCase()} STREAM FAILED:`, error?.message);
+      errors.push({
+        provider: name,
+        message: String(error?.message || "Unknown provider error").slice(0, 250)
+      });
+
+      // A provider that already streamed partial text to the client
+      // can't be silently retried — surface this as a hard failure
+      // instead of falling through to the next provider.
+      if (emittedAnyChunk) {
+        const midStreamError = new Error(
+          `${name} failed mid-stream: ${error?.message || "unknown error"}`
+        );
+        midStreamError.midStream = true;
+        throw midStreamError;
+      }
+    }
+  }
+
+  if (needsVision) {
+    throw new Error(
+      "Image analysis isn't available right now — no vision-capable AI provider (OpenAI/OpenRouter) is configured or reachable."
+    );
+  }
+
+  throw new Error(`All AI providers failed. ${JSON.stringify(errors)}`);
+}
+
+// ============================================================
+// 🧠 AI PROVIDER ROUTER (non-streaming — kept as a fallback path
+// for any future non-streaming callers; the main handler below
+// now uses streamAIResponse instead)
 // ============================================================
 // needsVision=true restricts routing to ONLY the two providers
 // whose configured model actually accepts image_url content
@@ -1113,49 +1387,94 @@ export default async function handler(req, res) {
     }
 
     // ----------------------------------------------------------
-    // BUILD MESSAGES + GENERATE
+    // BUILD MESSAGES
     // ----------------------------------------------------------
 
     const messages = buildMessages({ systemPrompt, message, history, imageDataUrl });
 
-    const result = await generateAIResponse({
-      messages,
-      maxTokens: plan.maxOutputTokens,
-      isPro,
-      needsVision
-    });
-
     // ----------------------------------------------------------
-    // RECORD USAGE
-    // ----------------------------------------------------------
-
-    const actualInputTokens = Number(result?.usage?.prompt_tokens) || estimatedInputTokens;
-    const actualOutputTokens =
-      Number(result?.usage?.completion_tokens) || estimateTokens(result.text);
-
-    recordUsage(user, {
-      type: "message",
-      inputTokens: actualInputTokens,
-      outputTokens: actualOutputTokens
-    });
-
-    await saveUser(user);
-
-    // ----------------------------------------------------------
-    // RESPONSE
+    // 🌊 STREAM THE RESPONSE
+    // ------------------------------------------------------------
+    // Everything above this point (limits, plan, vision routing)
+    // is unchanged — only how the final answer reaches the client
+    // is new. From here on we switch Content-Type to newline-
+    // delimited JSON (NDJSON) and write one line per event:
+    //   {"type":"chunk","text":"..."}   — a piece of the answer
+    //   {"type":"done", ...metadata}    — stream finished OK
+    //   {"type":"error","error":"..."}  — stream failed
+    // The frontend reads this with a stream reader instead of
+    // response.json(), so text appears live as Kirong writes it.
     // ----------------------------------------------------------
 
-    return res.status(200).json({
-      ok: true,
-      type: "text",
-      text: result.text,
-      reply: result.text,
-      provider: result.provider,
-      model: result.model,
-      plan: plan.id,
-      sawImage: needsVision,
-      usage: getUsageSnapshot(user)
-    });
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("X-Accel-Buffering", "no"); // disable proxy buffering where applicable
+    if (typeof res.flushHeaders === "function") {
+      res.flushHeaders();
+    }
+
+    let fullText = "";
+
+    const writeLine = (obj) => {
+      res.write(JSON.stringify(obj) + "\n");
+    };
+
+    try {
+      const result = await streamAIResponse({
+        messages,
+        maxTokens: plan.maxOutputTokens,
+        isPro,
+        needsVision,
+        onDelta: (delta) => {
+          fullText += delta;
+          writeLine({ type: "chunk", text: delta });
+        }
+      });
+
+      // ----------------------------------------------------------
+      // RECORD USAGE
+      // ----------------------------------------------------------
+
+      const actualInputTokens = Number(result?.usage?.prompt_tokens) || estimatedInputTokens;
+      const actualOutputTokens =
+        Number(result?.usage?.completion_tokens) || estimateTokens(result.text || fullText);
+
+      recordUsage(user, {
+        type: "message",
+        inputTokens: actualInputTokens,
+        outputTokens: actualOutputTokens
+      });
+
+      await saveUser(user);
+
+      writeLine({
+        type: "done",
+        provider: result.provider,
+        model: result.model,
+        plan: plan.id,
+        sawImage: needsVision,
+        usage: getUsageSnapshot(user)
+      });
+
+      return res.end();
+    } catch (streamError) {
+      console.error("KIRONG AI STREAM ERROR:", streamError);
+
+      // If nothing was ever written to the client, this is really
+      // just a normal request failure — but we've already committed
+      // to the NDJSON content-type once headers were flushed above,
+      // so we report it the same way (as an "error" event) rather
+      // than trying to rewrite response headers at this point.
+      writeLine({
+        type: "error",
+        error: fullText
+          ? "Kirong AI's connection dropped partway through the reply. Please try again."
+          : "Kirong AI is temporarily unavailable.",
+        code: "AI_SERVER_ERROR"
+      });
+
+      return res.end();
+    }
   } catch (error) {
     console.error("KIRONG AI ERROR:", error);
 
